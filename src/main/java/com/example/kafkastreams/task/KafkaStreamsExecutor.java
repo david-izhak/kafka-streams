@@ -9,8 +9,11 @@ import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.*;
 import org.apache.kafka.streams.state.*;
+import org.apache.kafka.streams.state.internals.InMemoryKeyValueBytesStoreSupplier;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 
@@ -26,6 +29,13 @@ public class KafkaStreamsExecutor {
 
     public static final String USER_STATE_STORE = "user-state-store";
     public static final String USER_BALANCE_STORE = "user-balance-store";
+
+    private static Map<String, String> changeLogConfigs = new HashMap<>();
+
+    static {
+        changeLogConfigs.put("retention.ms","172800000" ); // equals to two days
+        changeLogConfigs.put("retention.bytes", "10000000000"); // equals to 10 Gb
+    }
 
     // TODO: in development
 //    private static ReadOnlyKeyValueStore<String, MessageUserState> userStateStore = null;
@@ -80,23 +90,23 @@ public class KafkaStreamsExecutor {
 
     // TODO: in development
 
-//    public static void createStores(StreamsBuilder builder) {
-//        // Create KTable to store user state
-//        StoreBuilder<KeyValueStore<String, MessageUserState>> userStateStoreBuilder = Stores.keyValueStoreBuilder(
-//                Stores.inMemoryKeyValueStore(USER_STATE_STORE),
-//                Serdes.String(),
-//                Serdes.serdeFrom(new JsonSerializer<>(), new JsonDeserializer<>())
-//        );
-//        builder.addStateStore(userStateStoreBuilder);
-//
-//        // Create KTable to store user balance
-//        StoreBuilder<KeyValueStore<String, MessageUserBalance>> userBalanceStoreBuilder = Stores.keyValueStoreBuilder(
-//                Stores.inMemoryKeyValueStore(USER_BALANCE_STORE),
-//                Serdes.String(),
-//                Serdes.serdeFrom(new JsonSerializer<>(), new JsonDeserializer<>())
-//        );
-//        builder.addStateStore(userBalanceStoreBuilder);
-//    }
+    public static void createStores(StreamsBuilder builder) {
+        // Create KTable to store user state
+        StoreBuilder<KeyValueStore<String, MessageUserState>> userStateStoreBuilder = Stores.keyValueStoreBuilder(
+                Stores.inMemoryKeyValueStore(USER_STATE_STORE),
+                Serdes.String(),
+                StreamsSerdes.messageUserStateSerde()
+        );
+        builder.addStateStore(userStateStoreBuilder.withLoggingEnabled(changeLogConfigs));
+
+        // Create KTable to store user balance
+        StoreBuilder<KeyValueStore<String, MessageUserBalance>> userBalanceStoreBuilder = Stores.keyValueStoreBuilder(
+                Stores.inMemoryKeyValueStore(USER_BALANCE_STORE),
+                Serdes.String(),
+                StreamsSerdes.messageUserBalanceSerde()
+        );
+        builder.addStateStore(userBalanceStoreBuilder.withLoggingEnabled(changeLogConfigs));
+    }
 
     public static void createTopology(StreamsBuilder builder) {
 //        createStores(builder);
@@ -106,10 +116,18 @@ public class KafkaStreamsExecutor {
         final Serde<MessageUserBalance> messageUserBalanceSerde = StreamsSerdes.messageUserBalanceSerde();
         final Serde<MessageOutput> messageOutputSerde = StreamsSerdes.messageOutputSerde();
 
-        KStream<String, MessageUserState> userStateStream = builder.stream(INPUT_TOPIC_1, Consumed.with(stringSerde, messageUserStateSerde));
+        KStream<String, MessageUserState> userStateStream = builder.stream(
+                INPUT_TOPIC_1,
+                Consumed
+                        .with(stringSerde, messageUserStateSerde)
+                        .withTimestampExtractor(new MessageUserStateTimestampExtractor()
+                        )
+        );
 
         // Change KStream into KTable with using userId like a key
         // In this block we check if the new message is newer than the aggregated one using timestamp
+
+        KeyValueBytesStoreSupplier storeSupplier = Stores.inMemoryKeyValueStore(USER_STATE_STORE);
         KTable<String, MessageUserState> userStateTable = userStateStream
                 .groupByKey()
                 .reduce((aggValue, newValue) -> {
@@ -121,7 +139,13 @@ public class KafkaStreamsExecutor {
                 }, Materialized.as(USER_STATE_STORE));
         userStateTable.toStream().print(Printed.<String, MessageUserState>toSysOut().withLabel("My App User State"));
 
-        KStream<String, MessageUserBalance> userBalanceStream = builder.stream(INPUT_TOPIC_2, Consumed.with(stringSerde, messageUserBalanceSerde));
+        KStream<String, MessageUserBalance> userBalanceStream = builder.stream(
+                INPUT_TOPIC_2,
+                Consumed
+                        .with(stringSerde, messageUserBalanceSerde)
+                        .withTimestampExtractor(new MessageUserBalanceTimestampExtractor()
+                        )
+        );
 
         // Change KStream into KTable with using userId like a key
         // In this block we check if the new message is newer than the aggregated one using timestamp
