@@ -30,7 +30,7 @@ public class KafkaStreamsExecutor {
     public static final String USER_STATE_STORE = "user-state-store";
     public static final String USER_BALANCE_STORE = "user-balance-store";
 
-    private static Map<String, String> changeLogConfigs = new HashMap<>();
+    private static final Map<String, String> changeLogConfigs = new HashMap<>();
 
     static {
         changeLogConfigs.put("retention.ms","172800000" ); // equals to two days
@@ -38,8 +38,8 @@ public class KafkaStreamsExecutor {
     }
 
     // TODO: in development
-//    private static ReadOnlyKeyValueStore<String, MessageUserState> userStateStore = null;
-//    private static ReadOnlyKeyValueStore<String, MessageUserBalance> userBalanceStore = null;
+    private static ReadOnlyKeyValueStore<String, MessageUserState> userStateStore = null;
+    private static ReadOnlyKeyValueStore<String, MessageUserBalance> userBalanceStore = null;
 
     public static void main(String[] args) throws InterruptedException {
         final StreamsConfig streamsConfig = getStreamsConfig();
@@ -47,6 +47,9 @@ public class KafkaStreamsExecutor {
         createTopology(builder);
 
         KafkaStreams kafkaStreams = new KafkaStreams(builder.build(), streamsConfig);
+
+        userStateStore = kafkaStreams.store(StoreQueryParameters.fromNameAndType(USER_STATE_STORE, QueryableStoreTypes.keyValueStore()));
+        userBalanceStore = kafkaStreams.store(StoreQueryParameters.fromNameAndType(USER_BALANCE_STORE, QueryableStoreTypes.keyValueStore()));
 
         // attach shutdown handler to catch control
         final CountDownLatch latch = new CountDownLatch(1);
@@ -67,8 +70,7 @@ public class KafkaStreamsExecutor {
                 }
             });
             // Get the store
-//            userStateStore = kafkaStreams.store(StoreQueryParameters.fromNameAndType(USER_STATE_STORE, QueryableStoreTypes.keyValueStore()));
-//            userBalanceStore = kafkaStreams.store(StoreQueryParameters.fromNameAndType(USER_BALANCE_STORE, QueryableStoreTypes.keyValueStore()));
+
             latch.await();
         } catch (final Throwable e) {
             throw new InterruptedException(e.getMessage());
@@ -109,7 +111,7 @@ public class KafkaStreamsExecutor {
     }
 
     public static void createTopology(StreamsBuilder builder) {
-//        createStores(builder);
+        createStores(builder);
 
         final Serde<String> stringSerde = Serdes.String();
         final Serde<MessageUserState> messageUserStateSerde = StreamsSerdes.messageUserStateSerde();
@@ -127,7 +129,7 @@ public class KafkaStreamsExecutor {
         // Change KStream into KTable with using userId like a key
         // In this block we check if the new message is newer than the aggregated one using timestamp
 
-        KeyValueBytesStoreSupplier storeSupplier = Stores.inMemoryKeyValueStore(USER_STATE_STORE);
+//        KeyValueBytesStoreSupplier storeSupplier = Stores.inMemoryKeyValueStore(USER_STATE_STORE);
         KTable<String, MessageUserState> userStateTable = userStateStream
                 .groupByKey()
                 .reduce((aggValue, newValue) -> {
@@ -136,7 +138,9 @@ public class KafkaStreamsExecutor {
                     } else {
                         return aggValue;
                     }
-                }, Materialized.as(USER_STATE_STORE));
+                }
+//                , Materialized.as(USER_STATE_STORE)
+                );
         userStateTable.toStream().print(Printed.<String, MessageUserState>toSysOut().withLabel("My App User State"));
 
         KStream<String, MessageUserBalance> userBalanceStream = builder.stream(
@@ -157,11 +161,13 @@ public class KafkaStreamsExecutor {
                     } else {
                         return aggValue;
                     }
-                }, Materialized.as(USER_BALANCE_STORE));
+                }
+//                , Materialized.as(USER_BALANCE_STORE)
+                );
         userBalanceTable.toStream().print(Printed.<String, MessageUserBalance>toSysOut().withLabel("My App User Balance"));
 
         KStream<String, MessageOutput> messageOutputStateStream = userStateStream
-//                .filter((key, value) -> getLatestUserBalance(key) != null)
+                .filter((key, value) -> getLatestUserBalance(key) != null)
                 .mapValues(messageUserState -> MessageOutput.builder()
                                         .userId(messageUserState.getUserId())
                                         .state(messageUserState.getState())
@@ -175,7 +181,7 @@ public class KafkaStreamsExecutor {
 
 
         KStream<String, MessageOutput> messageOutputBalanceStream = userBalanceStream
-//                .filter((key, value) -> getLatestUserState(key) != null)
+                .filter((key, value) -> getLatestUserState(key) != null)
                 .mapValues(messageUserBalance -> MessageOutput.builder()
                         .userId(messageUserBalance.getUserId())
                         .state(null)
@@ -189,12 +195,12 @@ public class KafkaStreamsExecutor {
     }
 
     // TODO: in development
-//    public static UserState getLatestUserState(String userId) {
-//        return userStateStore.get(userId).getState();
-//    }
-//
-//    public static Double getLatestUserBalance(String userId) {
-//        return userBalanceStore.get(userId).getAccountBalance();
-//    }
+    public static UserState getLatestUserState(String userId) {
+        return userStateStore.get(userId).getState();
+    }
+
+    public static Double getLatestUserBalance(String userId) {
+        return userBalanceStore.get(userId).getAccountBalance();
+    }
 
 }
